@@ -4,7 +4,7 @@ DESTDIR ?= /
 BIN=tdx-cfgblock
 
 $(BIN): tdx-cfgblock.c tdx-cfgdata.h
-	@$(CC) $(CFLAGS) -o $@ $<
+	@$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
 
 .PHONY: clean install
 
