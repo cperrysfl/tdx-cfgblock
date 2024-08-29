@@ -191,34 +191,37 @@ void get_mac_from_serial(u32 tdx_serial, struct toradex_eth_addr *eth_addr)
 }
 
 struct non_volatile_device {
+	int type;
 	const char* path;
 	int offset;
 };
 
 const struct non_volatile_device nv_devs[] = {
-	[TDX_EEPROM_ID_MODULE] = {"/dev/mmcblk2boot0", 0x3ffe00},
-	[TDX_EEPROM_ID_CARRIER] = {"/sys/bus/nvmem/devices/3-00573/nvmem", 0},
+	{TDX_EEPROM_ID_MODULE, "/dev/mmcblk2boot0", 0x3ffe00},
+	{TDX_EEPROM_ID_CARRIER, "/sys/bus/nvmem/devices/3-00573/nvmem", 0},
+	{TDX_EEPROM_ID_CARRIER, "/sys/bus/nvmem/devices/3-00513/nvmem", 0},
 };
 
-static const struct non_volatile_device* eeprom_id_to_nv_device(u32 eeprom_id)
+static const struct non_volatile_device* first_valid_nv_dev(u32 type)
 {
-	if (eeprom_id >= TDX_EEPROM_ID_MODULE &&
-	    eeprom_id <= TDX_EEPROM_ID_CARRIER) {
-		return &nv_devs[eeprom_id];
-	}
-	return NULL;
-}
-
-static int read_nv_device_data(u32 eeprom_id, int offset, uint8_t *buf, int size)
-{
-	const struct non_volatile_device* nv_dev;
 	int fd;
 
-	nv_dev = eeprom_id_to_nv_device(eeprom_id);
-	if (!nv_dev) {
-		printf("error: bad eeprom id.\n");
-		return -1;
+	for (int i=0; i<ARRAY_SIZE(nv_devs); ++i) {
+		const struct non_volatile_device* nv_dev = &nv_devs[i];
+		if (nv_dev->type == type) {
+			fd = open(nv_dev->path, O_RDONLY);
+			if (fd != -1) {
+				close(fd);
+				return nv_dev;
+			}
+		}
 	}
+}
+
+static int read_nv_device_data(const struct non_volatile_device* nv_dev,
+	int offset, uint8_t *buf, int size)
+{
+	int fd;
 
 	fd = open(nv_dev->path, O_RDONLY);
 	if (fd == -1) {
@@ -230,27 +233,24 @@ static int read_nv_device_data(u32 eeprom_id, int offset, uint8_t *buf, int size
 
 	if (lseek(fd, offset, SEEK_SET) == -1) {
 		printf("error: cannot seek to %i.\n", offset);
+		close(fd);
 		return -1;
 	}
 
 	if (read(fd, buf, size) != size) {
 		printf("error: could not read %i bytes.\n", size);
+		close(fd);
 		return -1;
 	}
 
+	close(fd);
 	return 0;
 }
 
-static int write_nv_device_data(u32 eeprom_id, int offset, uint8_t *buf, int size)
+static int write_nv_device_data(const struct non_volatile_device* nv_dev,
+	int offset, uint8_t *buf, int size)
 {
-	const struct non_volatile_device* nv_dev;
 	int fd;
-
-	nv_dev = eeprom_id_to_nv_device(eeprom_id);
-	if (!nv_dev) {
-		printf("error: bad eeprom id.\n");
-		return -1;
-	}
 
 	fd = open(nv_dev->path, O_RDWR);
 	if (fd == -1) {
@@ -262,18 +262,21 @@ static int write_nv_device_data(u32 eeprom_id, int offset, uint8_t *buf, int siz
 
 	if (lseek(fd, offset, SEEK_SET) == -1) {
 		printf("error: cannot seek to %i.\n", offset);
+		close(fd);
 		return -1;
 	}
 
 	if (write(fd, buf, size) != size) {
 		printf("error: could not write %i bytes.\n", size);
+		close(fd);
 		return -1;
 	}
 
+	close(fd);
 	return 0;
 }
 
-static int read_tdx_cfg_block(void)
+static int read_tdx_cfg_block(const struct non_volatile_device* nv_dev)
 {
 	int ret = 0;
 	u8 *config_block = NULL;
@@ -290,7 +293,7 @@ static int read_tdx_cfg_block(void)
 
 	memset(config_block, 0, size);
 
-	ret = read_nv_device_data(TDX_EEPROM_ID_MODULE, 0x0, config_block,
+	ret = read_nv_device_data(nv_dev, 0x0, config_block,
 				    TDX_CFG_BLOCK_MAX_SIZE);
 	if (ret)
 		goto out;
@@ -452,7 +455,7 @@ static int write_tag(u8 *config_block, int *offset, int tag_id,
 	return 0;
 }
 
-int read_tdx_cfg_block_carrier(void)
+int read_tdx_cfg_block_carrier(const struct non_volatile_device* nv_dev)
 {
 	int ret = 0;
 	u8 *config_block = NULL;
@@ -469,7 +472,7 @@ int read_tdx_cfg_block_carrier(void)
 
 	memset(config_block, 0, size);
 
-	ret = read_nv_device_data(TDX_EEPROM_ID_CARRIER, 0x0, config_block,
+	ret = read_nv_device_data(nv_dev, 0x0, config_block,
 				   size);
 	if (ret)
 		return ret;
@@ -553,7 +556,8 @@ static int get_cfgblock_carrier_interactive(void)
 	return 0;
 }
 
-static int do_cfgblock_carrier_create(int force_overwrite, char *barcode)
+static int do_cfgblock_carrier_create(const struct non_volatile_device* nv_dev,
+	int force_overwrite, char *barcode)
 {
 	u8 *config_block;
 	size_t size = TDX_CFG_BLOCK_EXTRA_MAX_SIZE;
@@ -569,7 +573,7 @@ static int do_cfgblock_carrier_create(int force_overwrite, char *barcode)
 	}
 
 	memset(config_block, 0xff, size);
-	read_tdx_cfg_block_carrier();
+	read_tdx_cfg_block_carrier(nv_dev);
 	if (valid_cfgblock_carrier && !force_overwrite) {
 		char message[CONFIG_SYS_CBSIZE];
 
@@ -606,8 +610,7 @@ static int do_cfgblock_carrier_create(int force_overwrite, char *barcode)
 		  sizeof(tdx_car_serial));
 
 	memset(config_block + offset, 0, 32 - offset);
-	err = write_nv_device_data(TDX_EEPROM_ID_CARRIER, 0x0, config_block,
-				    size);
+	err = write_nv_device_data(nv_dev, 0x0, config_block, size);
 	if (err) {
 		printf("Failed to write Toradex Extra config block: %d\n",
 		       ret);
@@ -622,7 +625,8 @@ out:
 	return ret;
 }
 
-static int do_cfgblock_create(int force_overwrite, char *barcode)
+static int do_cfgblock_create(const struct non_volatile_device* nv_dev,
+	int force_overwrite, char *barcode)
 {
 	u8 *config_block;
 	size_t size = TDX_CFG_BLOCK_MAX_SIZE;
@@ -639,7 +643,7 @@ static int do_cfgblock_create(int force_overwrite, char *barcode)
 
 	memset(config_block, 0xff, size);
 
-	read_tdx_cfg_block();
+	read_tdx_cfg_block(nv_dev);
 	if (valid_cfgblock) {
 #if defined(CONFIG_TDX_CFG_BLOCK_IS_IN_NAND)
 		/*
@@ -702,7 +706,7 @@ static int do_cfgblock_create(int force_overwrite, char *barcode)
 
 	memset(config_block + offset, 0, 32 - offset);
 
-	err = write_nv_device_data(TDX_EEPROM_ID_MODULE, 0x0, config_block,
+	err = write_nv_device_data(nv_dev, 0x0, config_block,
 				     TDX_CFG_BLOCK_MAX_SIZE);
 	if (err) {
 		printf("Failed to write Toradex config block: %d\n", ret);
@@ -717,13 +721,13 @@ out:
 	return ret;
 }
 
-static int do_cfgblock_carrier_print()
+static int do_cfgblock_carrier_print(const struct non_volatile_device* nv_dev)
 {
 	char tdx_car_serial_str[SERIAL_STR_LEN + 1];
 	char tdx_car_rev_str[MODULE_VER_STR_LEN + MODULE_REV_STR_LEN + 1];
 	const char *tdx_carrier_board_name;
 
-	int ret = read_tdx_cfg_block_carrier();
+	int ret = read_tdx_cfg_block_carrier(nv_dev);
 	if (ret) {
 		printf("Failed to load Toradex carrier config block: %d\n",
 				ret);
@@ -753,12 +757,12 @@ static int do_cfgblock_carrier_print()
 	return CMD_RET_SUCCESS;
 }
 
-static int do_cfgblock_print()
+static int do_cfgblock_print(const struct non_volatile_device* nv_dev)
 {
 	char tdx_serial_str[SERIAL_STR_LEN + 1];
 	char tdx_board_rev_str[MODULE_VER_STR_LEN + MODULE_REV_STR_LEN + 1];
 
-	int ret = read_tdx_cfg_block();
+	int ret = read_tdx_cfg_block(nv_dev);
 	if (ret) {
 		printf("Failed to load Toradex config block: %d\n",
 				ret);
@@ -820,6 +824,7 @@ int main(int argc, char *const argv[])
 	int ret, i;
 	int carrier = 0, force_overwrite = 0;
 	char *barcode = NULL;
+	const struct non_volatile_device* nv_dev;
 
 	if (argc < 2) {
 		usage();
@@ -836,17 +841,22 @@ int main(int argc, char *const argv[])
 		}
 	}
 
+	nv_dev = first_valid_nv_dev(carrier ? TDX_EEPROM_ID_CARRIER :
+										TDX_EEPROM_ID_MODULE);
+	if (!nv_dev)
+		return -ENODEV;
+
 	if (!strcmp(argv[1], "create")) {
 		if (carrier) {
-			return do_cfgblock_carrier_create(force_overwrite, barcode);
+			return do_cfgblock_carrier_create(nv_dev, force_overwrite, barcode);
 		} else {
-			return do_cfgblock_create(force_overwrite, barcode);
+			return do_cfgblock_create(nv_dev, force_overwrite, barcode);
 		}
 	} else if (!strcmp(argv[1], "print")) {
 		if (carrier) {
-			return do_cfgblock_carrier_print();
+			return do_cfgblock_carrier_print(nv_dev);
 		} else {
-			return do_cfgblock_print();
+			return do_cfgblock_print(nv_dev);
 		}
 	} else if (!strcmp(argv[1], "list")) {
 		if (carrier) {
