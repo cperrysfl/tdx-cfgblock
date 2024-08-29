@@ -90,13 +90,11 @@ struct pid4list {
 	char * const name;
 };
 
-bool valid_cfgblock;
 struct toradex_hw tdx_hw_tag;
 struct toradex_eth_addr tdx_eth_addr;
 u32 tdx_serial;
 
 u32 tdx_car_serial;
-bool valid_cfgblock_carrier;
 struct toradex_hw tdx_car_hw_tag;
 
 char console_buffer[255];
@@ -301,11 +299,9 @@ static int read_tdx_cfg_block(const struct non_volatile_device* nv_dev)
 	/* Expect a valid tag first */
 	tag = (struct toradex_tag *)config_block;
 	if (tag->flags != TAG_FLAG_VALID || tag->id != TAG_VALID) {
-		valid_cfgblock = false;
 		ret = -EINVAL;
 		goto out;
 	}
-	valid_cfgblock = true;
 	offset = 4;
 
 	/*
@@ -480,11 +476,9 @@ int read_tdx_cfg_block_carrier(const struct non_volatile_device* nv_dev)
 	/* Expect a valid tag first */
 	tag = (struct toradex_tag *)config_block;
 	if (tag->flags != TAG_FLAG_VALID || tag->id != TAG_VALID) {
-		valid_cfgblock_carrier = false;
 		ret = -EINVAL;
 		goto out;
 	}
-	valid_cfgblock_carrier = true;
 	offset = 4;
 
 	while (offset + sizeof(struct toradex_tag) +
@@ -573,8 +567,8 @@ static int do_cfgblock_carrier_create(const struct non_volatile_device* nv_dev,
 	}
 
 	memset(config_block, 0xff, size);
-	read_tdx_cfg_block_carrier(nv_dev);
-	if (valid_cfgblock_carrier && !force_overwrite) {
+	err = read_tdx_cfg_block_carrier(nv_dev);
+	if ((err == 0) && !force_overwrite) {
 		char message[CONFIG_SYS_CBSIZE];
 
 		sprintf(message, "A valid Toradex Carrier config block is present, still recreate? [y/N] ");
@@ -643,8 +637,8 @@ static int do_cfgblock_create(const struct non_volatile_device* nv_dev,
 
 	memset(config_block, 0xff, size);
 
-	read_tdx_cfg_block(nv_dev);
-	if (valid_cfgblock) {
+	err = read_tdx_cfg_block(nv_dev);
+	if (err == 0) {
 #if defined(CONFIG_TDX_CFG_BLOCK_IS_IN_NAND)
 		/*
 		 * On NAND devices, recreation is only allowed if the page is
