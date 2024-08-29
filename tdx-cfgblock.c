@@ -90,12 +90,13 @@ struct pid4list {
 	char * const name;
 };
 
-struct toradex_hw tdx_hw_tag;
-struct toradex_eth_addr tdx_eth_addr;
-u32 tdx_serial;
-
-u32 tdx_car_serial;
-struct toradex_hw tdx_car_hw_tag;
+struct tdx_data {
+	struct toradex_hw hw_tag;
+	struct toradex_hw car_hw_tag;
+	struct toradex_eth_addr eth_addr;
+	u32 serial;
+	u32 car_serial;
+};
 
 char console_buffer[255];
 
@@ -274,7 +275,8 @@ static int write_nv_device_data(const struct non_volatile_device* nv_dev,
 	return 0;
 }
 
-static int read_tdx_cfg_block(const struct non_volatile_device* nv_dev)
+static int read_tdx_cfg_block(const struct non_volatile_device* nv_dev,
+	struct tdx_data* data)
 {
 	int ret = 0;
 	u8 *config_block = NULL;
@@ -318,13 +320,13 @@ static int read_tdx_cfg_block(const struct non_volatile_device* nv_dev)
 		if (tag->flags == TAG_FLAG_VALID) {
 			switch (tag->id) {
 			case TAG_MAC:
-				memcpy(&tdx_eth_addr, config_block + offset,
+				memcpy(&data->eth_addr, config_block + offset,
 				       6);
 
-				tdx_serial = get_serial_from_mac(&tdx_eth_addr);
+				data->serial = get_serial_from_mac(&data->eth_addr);
 				break;
 			case TAG_HW:
-				memcpy(&tdx_hw_tag, config_block + offset, 8);
+				memcpy(&data->hw_tag, config_block + offset, 8);
 				break;
 			}
 		}
@@ -334,8 +336,8 @@ static int read_tdx_cfg_block(const struct non_volatile_device* nv_dev)
 	}
 
 	/* Cap product id to avoid issues with a yet unknown one */
-	if (tdx_hw_tag.prodid >= ARRAY_SIZE(toradex_modules))
-		tdx_hw_tag.prodid = 0;
+	if (data->hw_tag.prodid >= ARRAY_SIZE(toradex_modules))
+		data->hw_tag.prodid = 0;
 
 out:
 	free(config_block);
@@ -354,7 +356,7 @@ static int parse_assembly_string(char *string_to_parse, u16 *assembly)
 	return 0;
 }
 
-static int get_cfgblock_interactive(void)
+static int get_cfgblock_interactive(struct tdx_data* data)
 {
 	char message[CONFIG_SYS_CBSIZE];
 	int len = 0;
@@ -376,7 +378,7 @@ static int get_cfgblock_interactive(void)
 		printf("Parsing module id failed\n");
 		return -1;
 	}
-	tdx_hw_tag.prodid = prodid;
+	data->hw_tag.prodid = prodid;
 
 	len = 0;
 	while (len < 4) {
@@ -384,10 +386,10 @@ static int get_cfgblock_interactive(void)
 		len = cli_readline(message);
 	}
 
-	tdx_hw_tag.ver_major = console_buffer[0] - '0';
-	tdx_hw_tag.ver_minor = console_buffer[2] - '0';
+	data->hw_tag.ver_major = console_buffer[0] - '0';
+	data->hw_tag.ver_minor = console_buffer[2] - '0';
 
-	ret = parse_assembly_string(console_buffer, &tdx_hw_tag.ver_assembly);
+	ret = parse_assembly_string(console_buffer, &data->hw_tag.ver_assembly);
 	if (ret) {
 		printf("Parsing module version failed\n");
 		return ret;
@@ -398,7 +400,7 @@ static int get_cfgblock_interactive(void)
 		len = cli_readline(message);
 	}
 
-	tdx_serial = dectoul(console_buffer, NULL);
+	data->serial = dectoul(console_buffer, NULL);
 
 	return 0;
 }
@@ -451,7 +453,8 @@ static int write_tag(u8 *config_block, int *offset, int tag_id,
 	return 0;
 }
 
-int read_tdx_cfg_block_carrier(const struct non_volatile_device* nv_dev)
+int read_tdx_cfg_block_carrier(const struct non_volatile_device* nv_dev,
+	struct tdx_data* data)
 {
 	int ret = 0;
 	u8 *config_block = NULL;
@@ -491,11 +494,11 @@ int read_tdx_cfg_block_carrier(const struct non_volatile_device* nv_dev)
 		if (tag->flags == TAG_FLAG_VALID) {
 			switch (tag->id) {
 			case TAG_CAR_SERIAL:
-				memcpy(&tdx_car_serial, config_block + offset,
-				       sizeof(tdx_car_serial));
+				memcpy(&data->car_serial, config_block + offset,
+				       sizeof(data->car_serial));
 				break;
 			case TAG_HW:
-				memcpy(&tdx_car_hw_tag, config_block +
+				memcpy(&data->car_hw_tag, config_block +
 				       offset, 8);
 				break;
 			}
@@ -509,7 +512,7 @@ out:
 	return ret;
 }
 
-static int get_cfgblock_carrier_interactive(void)
+static int get_cfgblock_carrier_interactive(struct tdx_data* data)
 {
 	char message[CONFIG_SYS_CBSIZE];
 	int len;
@@ -524,17 +527,17 @@ static int get_cfgblock_carrier_interactive(void)
 
 	sprintf(message, "Choose your carrier board (provide ID): ");
 	len = cli_readline(message);
-	tdx_car_hw_tag.prodid = dectoul(console_buffer, NULL);
+	data->car_hw_tag.prodid = dectoul(console_buffer, NULL);
 
 	do {
 		sprintf(message, "Enter carrier board version (e.g. V1.1B or V1.1#26): V");
 		len = cli_readline(message);
 	} while (len < 4);
 
-	tdx_car_hw_tag.ver_major = console_buffer[0] - '0';
-	tdx_car_hw_tag.ver_minor = console_buffer[2] - '0';
+	data->car_hw_tag.ver_major = console_buffer[0] - '0';
+	data->car_hw_tag.ver_minor = console_buffer[2] - '0';
 
-	ret = parse_assembly_string(console_buffer, &tdx_car_hw_tag.ver_assembly);
+	ret = parse_assembly_string(console_buffer, &data->car_hw_tag.ver_assembly);
 	if (ret) {
 		printf("Parsing module version failed\n");
 		return ret;
@@ -545,7 +548,7 @@ static int get_cfgblock_carrier_interactive(void)
 		len = cli_readline(message);
 	}
 
-	tdx_car_serial = dectoul(console_buffer, NULL);
+	data->car_serial = dectoul(console_buffer, NULL);
 
 	return 0;
 }
@@ -553,6 +556,7 @@ static int get_cfgblock_carrier_interactive(void)
 static int do_cfgblock_carrier_create(const struct non_volatile_device* nv_dev,
 	int force_overwrite, char *barcode)
 {
+	struct tdx_data data;
 	u8 *config_block;
 	size_t size = TDX_CFG_BLOCK_EXTRA_MAX_SIZE;
 	int offset = 0;
@@ -567,7 +571,7 @@ static int do_cfgblock_carrier_create(const struct non_volatile_device* nv_dev,
 	}
 
 	memset(config_block, 0xff, size);
-	err = read_tdx_cfg_block_carrier(nv_dev);
+	err = read_tdx_cfg_block_carrier(nv_dev, &data);
 	if ((err == 0) && !force_overwrite) {
 		char message[CONFIG_SYS_CBSIZE];
 
@@ -582,9 +586,9 @@ static int do_cfgblock_carrier_create(const struct non_volatile_device* nv_dev,
 	}
 
 	if (!barcode) {
-		err = get_cfgblock_carrier_interactive();
+		err = get_cfgblock_carrier_interactive(&data);
 	} else {
-		err = get_cfgblock_barcode(barcode, &tdx_car_hw_tag, &tdx_car_serial);
+		err = get_cfgblock_barcode(barcode, &data.car_hw_tag, &data.car_serial);
 	}
 
 	if (err) {
@@ -596,12 +600,12 @@ static int do_cfgblock_carrier_create(const struct non_volatile_device* nv_dev,
 	write_tag(config_block, &offset, TAG_VALID, NULL, 0);
 
 	/* Product Tag */
-	write_tag(config_block, &offset, TAG_HW, (u8 *)&tdx_car_hw_tag,
-		  sizeof(tdx_car_hw_tag));
+	write_tag(config_block, &offset, TAG_HW, (u8 *)&data.car_hw_tag,
+		  sizeof(data.car_hw_tag));
 
 	/* Serial Tag */
-	write_tag(config_block, &offset, TAG_CAR_SERIAL, (u8 *)&tdx_car_serial,
-		  sizeof(tdx_car_serial));
+	write_tag(config_block, &offset, TAG_CAR_SERIAL, (u8 *)&data.car_serial,
+		  sizeof(data.car_serial));
 
 	memset(config_block + offset, 0, 32 - offset);
 	err = write_nv_device_data(nv_dev, 0x0, config_block, size);
@@ -622,6 +626,7 @@ out:
 static int do_cfgblock_create(const struct non_volatile_device* nv_dev,
 	int force_overwrite, char *barcode)
 {
+	struct tdx_data data;
 	u8 *config_block;
 	size_t size = TDX_CFG_BLOCK_MAX_SIZE;
 	int offset = 0;
@@ -637,7 +642,7 @@ static int do_cfgblock_create(const struct non_volatile_device* nv_dev,
 
 	memset(config_block, 0xff, size);
 
-	err = read_tdx_cfg_block(nv_dev);
+	err = read_tdx_cfg_block(nv_dev, &data);
 	if (err == 0) {
 #if defined(CONFIG_TDX_CFG_BLOCK_IS_IN_NAND)
 		/*
@@ -675,9 +680,9 @@ static int do_cfgblock_create(const struct non_volatile_device* nv_dev,
 
 	/* Parse new Toradex config block data... */
 	if (!barcode) {
-		err = get_cfgblock_interactive();
+		err = get_cfgblock_interactive(&data);
 	} else {
-		err = get_cfgblock_barcode(barcode, &tdx_hw_tag, &tdx_serial);
+		err = get_cfgblock_barcode(barcode, &data.hw_tag, &data.serial);
 	}
 	if (err) {
 		ret = CMD_RET_FAILURE;
@@ -685,18 +690,18 @@ static int do_cfgblock_create(const struct non_volatile_device* nv_dev,
 	}
 
 	/* Convert serial number to MAC address (the storage format) */
-	get_mac_from_serial(tdx_serial, &tdx_eth_addr);
+	get_mac_from_serial(data.serial, &data.eth_addr);
 
 	/* Valid Tag */
 	write_tag(config_block, &offset, TAG_VALID, NULL, 0);
 
 	/* Product Tag */
-	write_tag(config_block, &offset, TAG_HW, (u8 *)&tdx_hw_tag,
-		  sizeof(tdx_hw_tag));
+	write_tag(config_block, &offset, TAG_HW, (u8 *)&data.hw_tag,
+		  sizeof(data.hw_tag));
 
 	/* MAC Tag */
-	write_tag(config_block, &offset, TAG_MAC, (u8 *)&tdx_eth_addr,
-		  sizeof(tdx_eth_addr));
+	write_tag(config_block, &offset, TAG_MAC, (u8 *)&data.eth_addr,
+		  sizeof(data.eth_addr));
 
 	memset(config_block + offset, 0, 32 - offset);
 
@@ -717,11 +722,12 @@ out:
 
 static int do_cfgblock_carrier_print(const struct non_volatile_device* nv_dev)
 {
+	struct tdx_data data;
 	char tdx_car_serial_str[SERIAL_STR_LEN + 1];
 	char tdx_car_rev_str[MODULE_VER_STR_LEN + MODULE_REV_STR_LEN + 1];
 	const char *tdx_carrier_board_name;
 
-	int ret = read_tdx_cfg_block_carrier(nv_dev);
+	int ret = read_tdx_cfg_block_carrier(nv_dev, &data);
 	if (ret) {
 		printf("Failed to load Toradex carrier config block: %d\n",
 				ret);
@@ -729,21 +735,21 @@ static int do_cfgblock_carrier_print(const struct non_volatile_device* nv_dev)
 	}
 
 	tdx_carrier_board_name =
-		get_toradex_carrier_boards(tdx_car_hw_tag.prodid);
+		get_toradex_carrier_boards(data.car_hw_tag.prodid);
 
 	snprintf(tdx_car_serial_str, sizeof(tdx_car_serial_str),
-			"%08u", tdx_car_serial);
+			"%08u", data.car_serial);
 	snprintf(tdx_car_rev_str, sizeof(tdx_car_rev_str),
 			"V%1d.%1d%s",
-			tdx_car_hw_tag.ver_major,
-			tdx_car_hw_tag.ver_minor,
-			get_board_assembly(tdx_car_hw_tag.ver_assembly));
+			data.car_hw_tag.ver_major,
+			data.car_hw_tag.ver_minor,
+			get_board_assembly(data.car_hw_tag.ver_assembly));
 
 	printf("carrier_prodid=\"%04d\"\n"
 			"carrier_prodname=\"%s\"\n"
 			"carrier_rev=\"%s\"\n"
 			"carrier_serial=\"%s\"\n",
-			tdx_car_hw_tag.prodid,
+			data.car_hw_tag.prodid,
 			tdx_carrier_board_name,
 			tdx_car_rev_str,
 			tdx_car_serial_str);
@@ -753,10 +759,11 @@ static int do_cfgblock_carrier_print(const struct non_volatile_device* nv_dev)
 
 static int do_cfgblock_print(const struct non_volatile_device* nv_dev)
 {
+	struct tdx_data data;
 	char tdx_serial_str[SERIAL_STR_LEN + 1];
 	char tdx_board_rev_str[MODULE_VER_STR_LEN + MODULE_REV_STR_LEN + 1];
 
-	int ret = read_tdx_cfg_block(nv_dev);
+	int ret = read_tdx_cfg_block(nv_dev, &data);
 	if (ret) {
 		printf("Failed to load Toradex config block: %d\n",
 				ret);
@@ -764,19 +771,19 @@ static int do_cfgblock_print(const struct non_volatile_device* nv_dev)
 	}
 
 	snprintf(tdx_serial_str, sizeof(tdx_serial_str),
-			"%08u", tdx_serial);
+			"%08u", data.serial);
 	snprintf(tdx_board_rev_str, sizeof(tdx_board_rev_str),
 			"V%1d.%1d%s",
-			tdx_hw_tag.ver_major,
-			tdx_hw_tag.ver_minor,
-			get_board_assembly(tdx_hw_tag.ver_assembly));
+			data.hw_tag.ver_major,
+			data.hw_tag.ver_minor,
+			get_board_assembly(data.hw_tag.ver_assembly));
 
 	printf("module_prodid=\"%04d\"\n"
 			"module_prodname=\"%s\"\n"
 			"module_rev=\"%s\"\n"
 			"module_serial=\"%s\"\n",
-			tdx_hw_tag.prodid,
-			toradex_modules[tdx_hw_tag.prodid].name,
+			data.hw_tag.prodid,
+			toradex_modules[data.hw_tag.prodid].name,
 			tdx_board_rev_str,
 			tdx_serial_str);
 
